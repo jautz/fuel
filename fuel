@@ -1,0 +1,276 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use XML::Simple qw(:strict);
+
+my $SEPARATOR;
+
+##### READING XML DATA ########################################################
+
+my $DATA_FILE = $ARGV[0] || "$ENV{HOME}/.fuel.xml";
+
+my $xs = XML::Simple->new();
+my $DATA;
+
+eval {
+  $DATA = $xs->XMLin($DATA_FILE,
+                     forcearray => [ 'fuel' ],
+                     keyattr => { 'fuel' => 'timestamp' });
+};
+if ($@) {
+  print "FAILED\n";
+  die "XML interpreter encountered problems: \n\t$@";
+}
+
+my @TIMESTAMPS = sort keys(%{$DATA->{'fuel'}});
+
+
+##### MAIN ####################################################################
+
+# for debugging only
+#use Data::Dumper;
+#print Dumper($DATA);
+#exit 0;
+
+print 'Found '.@TIMESTAMPS." fuel entries.\n";
+printf("Overall costs: %.2f\n", calcCosts($DATA));
+print 'Overall consumption-per-100km: '.calcConsumption($DATA, '', '')."\n";
+printSeparator();
+print '2009 consumption-per-100km: '
+      .calcConsumption($DATA, '2009-01-01T00-00', '2009-12-31T23-59')."\n";
+print '2010 consumption-per-100km: '
+      .calcConsumption($DATA, '2010-01-01T00-00', '2010-12-31T23-59')."\n";
+print '2011 consumption-per-100km: '
+      .calcConsumption($DATA, '2011-01-01T00-00', '2011-12-31T23-59')."\n";
+printSeparator();
+
+my ($tFirst, $tLast);
+for (my $i = @TIMESTAMPS - 1; $i >= 0; --$i) {
+  if (defined $tLast) {
+    if (isPartialRefill($DATA->{'fuel'}->{$TIMESTAMPS[$i]})) {
+      $tFirst = $TIMESTAMPS[$i];
+    }
+    else {
+      last;
+    }
+  }
+  else {
+    unless (isPartialRefill($DATA->{'fuel'}->{$TIMESTAMPS[$i]})) {
+      $tLast = $TIMESTAMPS[$i];
+      $tFirst = $tLast;
+    }
+  }
+}
+print "Consumption at the last complete refill ($tLast)".
+      ($tFirst eq $tLast ? '' : "\nand previous partial refills since $tFirst").
+      ": ".calcConsumption($DATA, $tFirst, $tLast)."\n";
+printSeparator();
+
+print "Details of each complete refill:\n";
+my $tStart;
+foreach my $refillTS (@TIMESTAMPS) {
+  $tStart = $refillTS unless (defined $tStart);
+  next if (isPartialRefill($DATA->{'fuel'}->{$refillTS}));
+  printf("ts=%s\tprice=%.2f\tconsumption=%s\n",
+         $refillTS,
+         getPrice($DATA, $refillTS),
+         calcConsumption($DATA, $tStart, $refillTS));
+  $tStart = undef;
+}
+
+#my $input1 = parseTimestampInput('2006-05-01');
+#my $input2 = parseTimestampInput('2006-05-30', 1);
+#print 'Custom consumption-per-100km: '.calcConsumption($DATA, $input1, $input2)."\n";
+
+
+###############################################################################
+##### SUBROUTINES #############################################################
+###############################################################################
+
+sub printSeparator {
+  unless ($SEPARATOR) {
+    $SEPARATOR = '';
+    for (my $cnt = 0; $cnt < 79; ++$cnt) {
+      $SEPARATOR .= '-';
+    }
+    $SEPARATOR .= "\n";
+  }
+  print $SEPARATOR;
+}
+
+
+sub isValidTimestamp {
+  my $t = shift or return 0;
+  return 1 if ($t =~ m/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}$/);
+  return 0;
+}
+
+
+sub parseTimestampInput {
+  my $t = shift or return undef;
+  my $fullDay = shift;
+
+  # trim leading and trailing whitespace
+  $t =~ s/^\s+|\s+$//g;
+  return $t if isValidTimestamp($t);
+
+  # append omitted time information
+  if ($t =~ m/^\d{4}-\d{1,2}-\d{1,2}$/) {
+    $t .= ($fullDay ? 'T23-59' : 'T00-00');
+  }
+  # fix leading zeros
+  if ($t =~ m/^\d{4}-\d{1,2}-\d{1,2}T\d{1,2}-\d{1,2}$/) {
+    my @parts = split /-|T/, $t;
+    $t = sprintf("%d-%02d-%02dT%02d-%02d", @parts);
+  }
+  return (isValidTimestamp($t) ? $t : undef);
+}
+
+
+sub getTimestampHash {
+  my $t = shift or return undef;
+  if (isValidTimestamp($t)) {
+    my $tHash = {};
+    ($tHash->{year}, $tHash->{month}, $tHash->{day},
+     $tHash->{hour}, $tHash->{minute}) = split /-|T/, $t;
+    return $tHash;
+  } else {
+    return undef;
+  }
+}
+
+
+# undef if neither t1 nor t2 is defined
+#  0    t1 == t2
+# +1    t1 < t2  (ascending order of input args is correct)
+# -1    t1 > t2  (ascending order of input args is wrong)
+sub compareTimestamps {
+  my $t1 = shift;
+  my $t2 = shift;
+  my $t1Hash = getTimestampHash($t1);
+  my $t2Hash = getTimestampHash($t2);
+  # return undef if both t1 and t2 are undefined:
+  return undef unless (defined $t1Hash || defined $t2Hash);
+  # return +1 if either t1 or t2 is undefined (`negative/positive infinity'):
+  return 1 if (!defined $t1Hash xor !defined $t2Hash);
+  # if we got here, both t1 and t2 are defined
+  foreach my $key ('year', 'month', 'day', 'hour', 'minute') {
+    next if ($t1Hash->{$key} == $t2Hash->{$key});
+    return  1 if ($t1Hash->{$key} < $t2Hash->{$key});
+    return -1 if ($t1Hash->{$key} > $t2Hash->{$key});
+  }
+  return 0; # t1 and t1 are exactly equal
+}
+
+
+sub getTimestampsByRange {
+  my $lBound = shift;
+  my $uBound = shift;
+  my $result = [];
+
+  my ($cmpFirst, $cmpLast);
+  foreach my $t (@TIMESTAMPS) {
+    defined ($cmpFirst = compareTimestamps($lBound, $t)) or
+                      print "ERROR: variables lBound and t are both undefined!";
+    defined ($cmpLast  = compareTimestamps($t, $uBound)) or
+                      print "ERROR: variables uBound and t are both undefined!";
+    #print "DEBUG: Testing $t on [$lBound, $uBound].\n";
+    # add timestamp to result array if lying within the given range
+    push @{$result}, $t if ($cmpFirst >= 0  &&  $cmpLast >= 0);
+  }
+  #print "DEBUG: filtered timestamps:\n"; foreach (@{$result}) { print "$_\n"; }
+  return $result;
+}
+
+
+# Returns undef if invalid timestamp was given OR offset exceeds valid range
+sub getTimestampByOffset {
+  my $t = shift;
+  return undef unless isValidTimestamp($t);
+  my $offset = shift;
+  return undef unless ($offset =~ m/^[-+]\d+$/);
+
+  my $indexUBound = @TIMESTAMPS - 1;
+
+  my $index;
+  for ($index = 0; $index <= $indexUBound; ++$index) {
+    last if ($TIMESTAMPS[$index] eq $t);
+  }
+  return undef if ($index > $indexUBound); # given $t does not exist!
+
+  $index += $offset;
+  if ($index < 0  ||  $index > $indexUBound) {
+    return undef;
+  } else {
+    return $TIMESTAMPS[$index];
+  }
+}
+
+
+# isPartialRefill(HashRef fuelElement)
+sub isPartialRefill {
+  my $fuelElement = shift or die "parameter fuelElement required";
+  my $attr = $fuelElement->{'partial'};
+  return (defined $attr && $attr =~ m/yes|true|1/i);
+}
+
+
+sub getPrice {
+  my $data = shift;
+  my $ts = shift;
+
+  return ($data->{'fuel'}->{$ts}->{'litres'} *
+          $data->{'fuel'}->{$ts}->{'price-per-litre'});
+}
+
+
+sub calcCosts {
+  my $data = shift;
+
+  my $sum = 0;
+  foreach my $ts (keys(%{$data->{'fuel'}})) {
+    $sum += getPrice($data, $ts);
+  }
+  return $sum;
+}
+
+
+sub calcConsumption {
+  my $data = shift;
+  my $from = shift;
+  my $until = shift;
+
+  my $keys = getTimestampsByRange($from, $until);
+  return 0 unless (@{$keys} > 0); # no data within range
+
+  # calculation requires a complete refill as last element
+  while (@{$keys} > 0 && isPartialRefill($data->{'fuel'}->{$keys->[@{$keys}-1]})) {
+    print STDERR '['.$keys->[@{$keys}-1]."] has to be dropped: trailing partial refill\n";
+    pop @{$keys};
+  }
+  return 0 unless (@{$keys} > 0); # no data within range
+
+  # calculation requires the range to start exactly after a complete refill
+  my $tBefore;
+  while (@{$keys} > 0 && defined($tBefore = getTimestampByOffset($keys->[0], -1)) &&
+         isPartialRefill($data->{'fuel'}->{$tBefore}))
+  {
+    print STDERR '['.$keys->[0]."] has to be dropped: ".
+                 "previous partial refill from $tBefore outside given range\n";
+    shift @{$keys};
+  }
+  return 0 unless (@{$keys} > 0); # no data within range
+
+  my $distanceAfter = $data->{'fuel'}->{$keys->[@{$keys}-1]}->{'km-count'};
+  my $distanceBefore = defined $tBefore
+                       ? $data->{'fuel'}->{$tBefore}->{'km-count'}
+                       : $data->{'defaults'}->{'km-start'};
+
+  my $litres = 0;
+  foreach my $key (@{$keys}) {
+    $litres += $data->{'fuel'}->{$key}->{'litres'};
+  }
+  return sprintf("%.2f", ($litres / ($distanceAfter - $distanceBefore)) * 100);
+}

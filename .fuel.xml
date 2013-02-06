@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<root>
+
+  <defaults>
+    <!-- global defaults: set them once here -->
+    <!-- km-start: initial value of your milage counter -->
+    <km-start>74208</km-start>
+    <fuel-type>ROZ-95</fuel-type>
+    <!-- entry defaults: these values can be overridden in each fuel entry -->
+    <brand>BigOilCompany</brand>
+    <station>My Favorite Station, Main Street, 12345 Metropolis</station>
+  </defaults>
+
+  <fuel timestamp="2011-11-16T19-01" partial="no">
+    <litres>32.03</litres>
+    <price-per-litre>1.594</price-per-litre>
+    <km-count>74657</km-count>
+  </fuel>
+
+  <!-- set partial="yes" if you did not fill up completely -->
+  <fuel timestamp="2011-11-20T12-01" partial="yes">
+    <litres>12.92</litres>
+    <price-per-litre>1.559</price-per-litre>
+    <km-count>75169</km-count>
+  </fuel>
+
+  <fuel timestamp="2011-11-20T15-37" partial="no">
+    <litres>45.53</litres>
+    <price-per-litre>1.519</price-per-litre>
+    <km-count>75410</km-count>
+    <brand>AnotherBrand</brand>
+    <station>Somewhere</station>
+  </fuel>
+
+</root>
