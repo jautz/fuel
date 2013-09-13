@@ -5,8 +5,6 @@ use warnings;
 
 use XML::Simple qw(:strict);
 
-my $SEPARATOR;
-
 ##### READING XML DATA ########################################################
 
 my $DATA_FILE = $ARGV[0] || "$ENV{HOME}/.fuel.xml";
@@ -34,16 +32,18 @@ my @TIMESTAMPS = sort keys(%{$DATA->{'fuel'}});
 #print Dumper($DATA);
 #exit 0;
 
+my $first_year = 2009;
+my $this_year = 1900 + (localtime(time))[5];
+
 print 'Found '.@TIMESTAMPS." fuel entries.\n";
 printf("Overall costs: %.2f\n", calcCosts($DATA));
 print 'Overall consumption-per-100km: '.calcConsumption($DATA, '', '')."\n";
 printSeparator();
-print '2009 consumption-per-100km: '
-      .calcConsumption($DATA, '2009-01-01T00-00', '2009-12-31T23-59')."\n";
-print '2010 consumption-per-100km: '
-      .calcConsumption($DATA, '2010-01-01T00-00', '2010-12-31T23-59')."\n";
-print '2011 consumption-per-100km: '
-      .calcConsumption($DATA, '2011-01-01T00-00', '2011-12-31T23-59')."\n";
+
+foreach my $year ($first_year..$this_year) {
+    print "$year consumption-per-100km: "
+          .calcConsumption($DATA, "$year-01-01T00-00", "$year-12-31T23-59")."\n";
+}
 printSeparator();
 
 my ($tFirst, $tLast);
@@ -71,6 +71,7 @@ printSeparator();
 print "Details of each complete refill:\n";
 my $tStart;
 foreach my $refillTS (@TIMESTAMPS) {
+  next unless ($refillTS =~ m/^$this_year/);
   $tStart = $refillTS unless (defined $tStart);
   next if (isPartialRefill($DATA->{'fuel'}->{$refillTS}));
   printf("ts=%s\tprice=%.2f\tconsumption=%s\n",
@@ -90,14 +91,7 @@ foreach my $refillTS (@TIMESTAMPS) {
 ###############################################################################
 
 sub printSeparator {
-  unless ($SEPARATOR) {
-    $SEPARATOR = '';
-    for (my $cnt = 0; $cnt < 79; ++$cnt) {
-      $SEPARATOR .= '-';
-    }
-    $SEPARATOR .= "\n";
-  }
-  print $SEPARATOR;
+  print '-' x 79 . "\n";
 }
 
 
